@@ -1,0 +1,11 @@
+# Recordings and transcripts (keep local)
+recordings/*.wav
+transcripts/*.txt
+
+# Config with API key
+config.json
+
+# Python
+__pycache__/
+*.pyc
+.DS_Store
