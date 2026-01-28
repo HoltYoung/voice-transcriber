@@ -14,12 +14,14 @@ from datetime import datetime
 from pathlib import Path
 import json
 
-# Try to import OpenAI
+# Try to import local Whisper
 try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
+    import whisper
+    WHISPER_AVAILABLE = True
+    WHISPER_MODEL = None  # Lazy load
 except ImportError:
-    OPENAI_AVAILABLE = False
+    WHISPER_AVAILABLE = False
+    WHISPER_MODEL = None
 
 # App directories
 APP_DIR = Path(__file__).parent
@@ -313,85 +315,36 @@ class VoiceTranscriber(ctk.CTk):
             self.after(2000, lambda: self.status_label.configure(text="Ready"))
             
     def transcribe_audio(self, audio_path):
-        """Transcribe audio using OpenAI Whisper API with chunking"""
-        if not self.api_key:
-            print("No API key configured")
-            return None
-            
-        if not OPENAI_AVAILABLE:
-            print("OpenAI package not installed")
+        """Transcribe audio using local Whisper model (free!)"""
+        global WHISPER_MODEL
+        
+        if not WHISPER_AVAILABLE:
+            print("Whisper not installed. Run: pip install openai-whisper")
+            self.after(0, lambda: self.status_label.configure(text="Install whisper first"))
             return None
             
         try:
-            client = OpenAI(api_key=self.api_key)
+            # Load model if not already loaded (first time takes a bit)
+            if WHISPER_MODEL is None:
+                self.after(0, lambda: self.progress_label.configure(text="Loading Whisper model..."))
+                self.after(0, lambda: self.progress_bar.set(0.1))
+                # Using "base" model - good balance of speed/accuracy
+                # Options: tiny, base, small, medium, large
+                WHISPER_MODEL = whisper.load_model("base")
             
-            # Check file size - Whisper has a 25MB limit
-            file_size = os.path.getsize(audio_path)
-            max_size = 24 * 1024 * 1024  # 24MB to be safe
+            self.after(0, lambda: self.progress_label.configure(text="Transcribing..."))
+            self.after(0, lambda: self.progress_bar.set(0.3))
             
-            if file_size <= max_size:
-                # Single file transcription
-                self.after(0, lambda: self.progress_bar.set(0.3))
-                with open(audio_path, "rb") as f:
-                    transcript = client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=f,
-                        response_format="text"
-                    )
-                self.after(0, lambda: self.progress_bar.set(0.9))
-                return transcript
-            else:
-                # Need to chunk the audio
-                return self.transcribe_chunked(client, audio_path)
+            # Transcribe
+            result = WHISPER_MODEL.transcribe(str(audio_path))
+            
+            self.after(0, lambda: self.progress_bar.set(0.9))
+            return result["text"]
                 
         except Exception as e:
             print(f"Transcription error: {e}")
+            self.after(0, lambda: self.status_label.configure(text=f"Error: {str(e)[:30]}"))
             return None
-            
-    def transcribe_chunked(self, client, audio_path):
-        """Transcribe long audio by chunking"""
-        from pydub import AudioSegment
-        
-        self.after(0, lambda: self.progress_label.configure(text="Splitting audio..."))
-        
-        # Load audio
-        audio = AudioSegment.from_wav(str(audio_path))
-        
-        # Chunk into 10-minute segments (Whisper handles this well)
-        chunk_length_ms = 10 * 60 * 1000  # 10 minutes
-        chunks = []
-        
-        for i in range(0, len(audio), chunk_length_ms):
-            chunks.append(audio[i:i + chunk_length_ms])
-            
-        transcripts = []
-        total_chunks = len(chunks)
-        
-        for i, chunk in enumerate(chunks):
-            self.after(0, lambda i=i: self.progress_label.configure(
-                text=f"Transcribing chunk {i+1}/{total_chunks}..."
-            ))
-            self.after(0, lambda i=i: self.progress_bar.set((i + 0.5) / total_chunks))
-            
-            # Export chunk to temp file
-            chunk_path = RECORDINGS_DIR / f"temp_chunk_{i}.wav"
-            chunk.export(str(chunk_path), format="wav")
-            
-            try:
-                with open(chunk_path, "rb") as f:
-                    transcript = client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=f,
-                        response_format="text"
-                    )
-                transcripts.append(transcript)
-            finally:
-                # Clean up temp file
-                chunk_path.unlink(missing_ok=True)
-                
-            self.after(0, lambda i=i: self.progress_bar.set((i + 1) / total_chunks))
-            
-        return "\n\n".join(transcripts)
         
     def open_settings(self):
         """Open settings dialog for API key"""
